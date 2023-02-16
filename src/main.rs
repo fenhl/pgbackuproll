@@ -3,7 +3,7 @@
 
 use {
     std::{
-        collections::BTreeSet,
+        collections::BTreeMap,
         ffi::OsString,
         path::PathBuf,
     },
@@ -26,7 +26,8 @@ use {
     xdg::BaseDirectories,
 };
 
-const FILENAME_FORMAT: &str = "%Y-%m-%d_%H-%M-%S.sql";
+const UNCOMPRESSED_FILENAME_FORMAT: &str = "%Y-%m-%d_%H-%M-%S.sql";
+const COMPRESSED_FILENAME_FORMAT: &str = "%Y-%m-%d_%H-%M-%S.sql.gz";
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
@@ -57,23 +58,27 @@ fn backup_path() -> Result<PathBuf, Error> {
 /// If only one backup file exists, it's not deleted and `false` is returned.
 async fn delete_one(verbose: bool) -> Result<bool, Error> {
     let dir = backup_path()?;
-    let mut timestamps = BTreeSet::default();
+    let mut timestamps = BTreeMap::default();
     pin! {
         let entries = fs::read_dir(&dir);
     }
     while let Some(entry) = entries.try_next().await? {
-        timestamps.insert(Utc.datetime_from_str(&entry.file_name().into_string()?, FILENAME_FORMAT)?);
+        let filename = entry.file_name().into_string()?;
+        timestamps.insert(
+            Utc.datetime_from_str(&filename, UNCOMPRESSED_FILENAME_FORMAT)
+                .or_else(|_| Utc.datetime_from_str(&filename, COMPRESSED_FILENAME_FORMAT))?,
+            filename,
+        );
     }
-    let timestamp_to_delete = match timestamps.len() {
+    let filename = match timestamps.len() {
         0 | 1 => return Ok(false),
-        2 => timestamps.into_iter().next().unwrap(),
-        _ => *timestamps.iter().tuple_windows().min_by_key(|&(&prev, &curr, &next)| {
+        2 => timestamps.into_values().next().unwrap(),
+        _ => timestamps.iter().tuple_windows().min_by_key(|&((&prev, _), (&curr, _), (&next, _))| {
             let mut diffs = [curr - prev, next - curr];
             diffs.sort();
             diffs
-        }).unwrap().1,
+        }).unwrap().1.1.clone(),
     };
-    let filename = timestamp_to_delete.format(FILENAME_FORMAT).to_string();
     if verbose {
         println!("deleting {filename}");
     }
@@ -83,7 +88,7 @@ async fn delete_one(verbose: bool) -> Result<bool, Error> {
 
 async fn make_backup() -> Result<(), Error> {
     Command::new("pg_dumpall")
-        .stdout(std::fs::File::create(backup_path()?.join(Utc::now().format(FILENAME_FORMAT).to_string()))?)
+        .stdout(std::fs::File::create(backup_path()?.join(Utc::now().format(UNCOMPRESSED_FILENAME_FORMAT).to_string()))?)
         .spawn()? // don't override stdout
         .check("pg_dumpall").await?;
     Ok(())
