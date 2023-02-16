@@ -95,9 +95,33 @@ async fn make_backup() -> Result<(), Error> {
 /// * only one backup file is remaining (returns `Ok(false)`), or
 /// * an error occurs (returns `Err(_)`).
 async fn make_room(amount: u64, verbose: bool) -> Result<bool, Error> {
+    let dir = backup_path()?;
     loop {
-        let fs = backup_path()?.ancestors().map(|ancestor| System::new().mount_at(ancestor)).find_map(Result::ok).ok_or(Error::NoMount)?;
+        let fs = dir.ancestors().map(|ancestor| System::new().mount_at(ancestor)).find_map(Result::ok).ok_or(Error::NoMount)?;
         if fs.avail < ByteSize::gib(amount as u64) || (fs.avail.as_u64() as f64 / fs.total.as_u64() as f64) < (amount as f64 / 100.0) {
+            pin! {
+                let entries = fs::read_dir(&dir);
+            }
+            let mut smallest_uncompressed = None;
+            while let Some(entry) = entries.try_next().await? {
+                let path = entry.path();
+                if path.extension().and_then(|ext| ext.to_str()) != Some("gz") {
+                    // this works because the backups are regular files, not directories
+                    let size = entry.metadata().await?.len();
+                    if smallest_uncompressed.as_ref().map_or(true, |&(_, smallest_size)| size < smallest_size) {
+                        smallest_uncompressed = Some((path, size));
+                    }
+                }
+            }
+            if let Some((path, size)) = smallest_uncompressed {
+                if ByteSize::b(size) < fs.avail {
+                    Command::new("gzip")
+                        .arg(path)
+                        .check("gzip").await?;
+                    continue
+                }
+            }
+            // not enough room to compress anything or no uncompressed backups left, delete backups to make room
             if !delete_one(verbose).await? { return Ok(false) }
         } else {
             return Ok(true)
