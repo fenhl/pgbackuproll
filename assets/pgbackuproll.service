@@ -4,7 +4,7 @@ Description=postgresql database backups
 Wants=postgresql@15-main.service
 
 [Service]
-ExecStart=/home/postgres/.cargo/bin/pgbackuproll
+ExecStart=/var/lib/postgresql/.cargo/bin/pgbackuproll
 Group=postgres
 Type=oneshot
 User=postgres
