@@ -21,7 +21,10 @@ use {
     },
     wheel::{
         fs,
-        traits::AsyncCommandOutputExt as _,
+        traits::{
+            AsyncCommandOutputExt as _,
+            IoResultExt as _,
+        },
     },
     xdg::BaseDirectories,
 };
@@ -34,8 +37,6 @@ enum Error {
     #[error(transparent)] ChronoParse(#[from] chrono::format::ParseError),
     #[error(transparent)] Io(#[from] std::io::Error),
     #[error(transparent)] Wheel(#[from] wheel::Error),
-    #[error("backup directory not found, create at /usr/local/share/pgbackuproll")]
-    BackupDir,
     #[error("failed to check file system stats at backup directory")]
     NoMount,
     #[error("non-UTF-8 filename")]
@@ -48,15 +49,17 @@ impl From<OsString> for Error {
     }
 }
 
-fn backup_path() -> Result<PathBuf, Error> {
-    BaseDirectories::new().find_data_file("pgbackuproll").ok_or(Error::BackupDir)
+fn backup_path(dir_name: &str) -> Result<PathBuf, Error> {
+    let base_dirs = BaseDirectories::new();
+    if let Some(path) = base_dirs.find_data_file(dir_name) { return Ok(path) } // prefer existing dir even if it's not in data home
+    Ok(base_dirs.create_data_directory(dir_name).at_unknown()?)
 }
 
 /// Deletes the backup file that's closest to other backup files. In case of a tie, the oldest backup is deleted.
 ///
 /// If only one backup file exists, it's not deleted and `false` is returned.
-async fn delete_one(verbose: bool) -> Result<bool, Error> {
-    let dir = backup_path()?;
+async fn delete_one(dir_name: &str, verbose: bool) -> Result<bool, Error> {
+    let dir = backup_path(dir_name)?;
     let mut timestamps = BTreeMap::default();
     pin! {
         let entries = fs::read_dir(&dir);
@@ -86,11 +89,22 @@ async fn delete_one(verbose: bool) -> Result<bool, Error> {
     Ok(true)
 }
 
-async fn make_backup() -> Result<(), Error> {
-    Command::new("pg_dumpall")
-        .stdout(std::fs::File::create(backup_path()?.join(Utc::now().format(UNCOMPRESSED_FILENAME_FORMAT).to_string()))?)
+async fn make_backup(remote: Option<&str>, dir_name: &str) -> Result<(), Error> {
+    let mut cmd;
+    if let Some(remote) = remote {
+        cmd = Command::new("ssh");
+        cmd.arg(remote);
+        cmd.arg("sudo");
+        cmd.arg("-u");
+        cmd.arg("postgres");
+        cmd.arg("pg_dumpall");
+    } else {
+        cmd = Command::new("pg_dumpall");
+    }
+    cmd
+        .stdout(std::fs::File::create(backup_path(dir_name)?.join(Utc::now().format(UNCOMPRESSED_FILENAME_FORMAT).to_string()))?)
         .spawn()? // don't override stdout
-        .check("pg_dumpall").await?;
+        .check(if remote.is_some() { "ssh" } else { "pg_dumpall" }).await?;
     Ok(())
 }
 
@@ -99,8 +113,8 @@ async fn make_backup() -> Result<(), Error> {
 /// * at least `amount` gibibytes are free _and_ at least `amount` % of the disk is free (returns `Ok(true)`),
 /// * only one backup file is remaining (returns `Ok(false)`), or
 /// * an error occurs (returns `Err(_)`).
-async fn make_room(amount: u64, verbose: bool) -> Result<bool, Error> {
-    let dir = backup_path()?;
+async fn make_room(dir_name: &str, amount: u64, verbose: bool) -> Result<bool, Error> {
+    let dir = backup_path(dir_name)?;
     loop {
         let fs = dir.ancestors().map(|ancestor| System::new().mount_at(ancestor)).find_map(Result::ok).ok_or(Error::NoMount)?;
         if fs.avail < ByteSize::gib(amount as u64) || (fs.avail.as_u64() as f64 / fs.total.as_u64() as f64) < (amount as f64 / 100.0) {
@@ -127,7 +141,7 @@ async fn make_room(amount: u64, verbose: bool) -> Result<bool, Error> {
                 }
             }
             // not enough room to compress anything or no uncompressed backups left, delete backups to make room
-            if !delete_one(verbose).await? { return Ok(false) }
+            if !delete_one(dir_name, verbose).await? { return Ok(false) }
         } else {
             return Ok(true)
         }
@@ -137,15 +151,19 @@ async fn make_room(amount: u64, verbose: bool) -> Result<bool, Error> {
 #[derive(clap::Parser)]
 #[clap(version)]
 struct Args {
+    #[clap(long, default_value = "pgbackuproll")]
+    dir_name: String,
+    #[clap(long)]
+    remote: Option<String>,
     #[clap(short, long)]
     verbose: bool,
 }
 
 #[wheel::main]
-async fn main(Args { verbose }: Args) -> Result<(), Error> {
-    if make_room(10, verbose).await? {
-        make_backup().await?;
-        make_room(10, verbose).await?;
+async fn main(Args { remote, dir_name, verbose }: Args) -> Result<(), Error> {
+    if make_room(&dir_name, 10, verbose).await? {
+        make_backup(remote.as_deref(), &dir_name).await?;
+        make_room(&dir_name, 10, verbose).await?;
     }
     Ok(())
 }
