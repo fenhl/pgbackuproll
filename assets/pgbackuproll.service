@@ -1,0 +1,10 @@
+[Unit]
+After=postgresql@15-main.service
+Description=postgresql database backups
+Wants=postgresql@15-main.service
+
+[Service]
+ExecStart=/home/fenhl/.cargo/bin/pgbackuproll
+Group=postgres
+Type=oneshot
+User=postgres

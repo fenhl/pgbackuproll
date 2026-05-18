@@ -1,0 +1,10 @@
+[Unit]
+After=postgresql@15-main.service
+Description=postgresql database backups timer
+Wants=postgresql@15-main.service
+
+[Timer]
+OnCalendar=*-*-* 14:21:33
+
+[Install]
+WantedBy=timers.target
