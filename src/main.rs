@@ -1,5 +1,5 @@
-#![deny(rust_2018_idioms, unused, unused_crate_dependencies, unused_import_braces, unused_lifetimes, unused_qualifications, warnings)]
-#![forbid(unsafe_code)]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use {
     std::{
@@ -34,7 +34,6 @@ enum Error {
     #[error(transparent)] ChronoParse(#[from] chrono::format::ParseError),
     #[error(transparent)] Io(#[from] std::io::Error),
     #[error(transparent)] Wheel(#[from] wheel::Error),
-    #[error(transparent)] Xdg(#[from] xdg::BaseDirectoriesError),
     #[error("backup directory not found, create at /usr/local/share/pgbackuproll")]
     BackupDir,
     #[error("failed to check file system stats at backup directory")]
@@ -50,7 +49,7 @@ impl From<OsString> for Error {
 }
 
 fn backup_path() -> Result<PathBuf, Error> {
-    BaseDirectories::new()?.find_data_file("pgbackuproll").ok_or(Error::BackupDir)
+    BaseDirectories::new().find_data_file("pgbackuproll").ok_or(Error::BackupDir)
 }
 
 /// Deletes the backup file that's closest to other backup files. In case of a tie, the oldest backup is deleted.
@@ -65,8 +64,9 @@ async fn delete_one(verbose: bool) -> Result<bool, Error> {
     while let Some(entry) = entries.try_next().await? {
         let filename = entry.file_name().into_string()?;
         timestamps.insert(
-            Utc.datetime_from_str(&filename, UNCOMPRESSED_FILENAME_FORMAT)
-                .or_else(|_| Utc.datetime_from_str(&filename, COMPRESSED_FILENAME_FORMAT))?,
+            NaiveDateTime::parse_from_str(&filename, UNCOMPRESSED_FILENAME_FORMAT)
+                .or_else(|_| NaiveDateTime::parse_from_str(&filename, COMPRESSED_FILENAME_FORMAT))?
+                .and_utc(),
             filename,
         );
     }
@@ -141,7 +141,7 @@ struct Args {
     verbose: bool,
 }
 
-#[wheel::main(debug)]
+#[wheel::main]
 async fn main(Args { verbose }: Args) -> Result<(), Error> {
     if make_room(10, verbose).await? {
         make_backup().await?;

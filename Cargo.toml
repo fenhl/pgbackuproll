@@ -1,20 +1,33 @@
 [package]
 name = "pgbackuproll"
-version = "1.0.2"
-edition = "2021"
+version = "1.0.3"
+edition = "2024"
+rust-version = "1.91" # nixpkgs stable
+
+[lints.rust]
+rust_2018_idioms = "deny"
+unsafe_code = "forbid"
+unused = "deny"
+unused_crate_dependencies = "deny"
+unused_import_braces = "deny"
+unused_lifetimes = "deny"
+unused_qualifications = "deny"
+warnings = "deny"
 
 [profile.release]
+codegen-units = 1
 lto = true
 strip = true
 
 [dependencies]
-bytesize = "1.1.0"
-chrono = "0.4.23"
-clap = { version = "4.1.4", features = ["derive"] }
-futures = "0.3.26"
-itertools = "0.10.5"
-systemstat = "0.2.3"
-thiserror = "1.0.38"
-tokio = { version = "1.25.0", features = ["process"] }
-wheel = { git = "https://github.com/fenhl/wheel", branch = "main", version = "0.8.2" }
-xdg = "2.4.1"
+bytesize = "1" # transitive dependency of systemstat
+chrono = "0.4"
+clap = { version = "4", features = ["derive"] }
+futures = "0.3"
+itertools = "0.14"
+mimalloc = "0.1"
+systemstat = "0.2"
+thiserror = "2"
+tokio = { version = "1", features = ["process"] }
+wheel = { git = "https://github.com/fenhl/wheel" }
+xdg = "3"
