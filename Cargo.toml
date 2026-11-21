@@ -2,7 +2,7 @@
 name = "pgbackuproll"
 version = "1.1.0"
 edition = "2024"
-rust-version = "1.91" # nixpkgs stable
+rust-version = "1.95" # nixpkgs stable
 
 [lints.rust]
 rust_2018_idioms = "deny"
@@ -24,7 +24,7 @@ bytesize = "1" # transitive dependency of systemstat
 chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
 futures = "0.3"
-itertools = "0.14"
+itertools = "0.15"
 mimalloc = "0.1"
 systemstat = "0.2"
 thiserror = "2"
