@@ -20,7 +20,10 @@ use {
         process::Command,
     },
     wheel::{
-        fs,
+        fs::{
+            self,
+            File,
+        },
         traits::{
             AsyncCommandOutputExt as _,
             IoResultExt as _,
@@ -90,6 +93,7 @@ async fn delete_one(dir_name: &str, verbose: bool) -> Result<bool, Error> {
 }
 
 async fn make_backup(remote: Option<&str>, dir_name: &str) -> Result<(), Error> {
+    let backup_path = backup_path(dir_name)?.join(Utc::now().format(UNCOMPRESSED_FILENAME_FORMAT).to_string());
     let mut cmd;
     if let Some(remote) = remote {
         cmd = Command::new("ssh");
@@ -101,11 +105,17 @@ async fn make_backup(remote: Option<&str>, dir_name: &str) -> Result<(), Error> 
     } else {
         cmd = Command::new("pg_dumpall");
     }
-    cmd
-        .stdout(std::fs::File::create(backup_path(dir_name)?.join(Utc::now().format(UNCOMPRESSED_FILENAME_FORMAT).to_string()))?)
+    match cmd
+        .stdout(File::create_new(&backup_path).await?.into_std().await)
         .spawn()? // don't override stdout
-        .check(if remote.is_some() { "ssh" } else { "pg_dumpall" }).await?;
-    Ok(())
+        .check(if remote.is_some() { "ssh" } else { "pg_dumpall" }).await
+    {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            let _ = fs::remove_file(backup_path).await;
+            Err(e.into())
+        }
+    }
 }
 
 /// `amount` should be a number between 0 and 100. Backups will be deleted until:
